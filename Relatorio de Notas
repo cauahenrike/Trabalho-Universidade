@@ -1,0 +1,253 @@
+// Blibliotecas utilizadas
+#include <stdio.h> // Entrada e saída padrão (printf, scanf, fopen, fclose, fscanf)
+#include <stdlib.h> // Funções gerais da linguagem C (memória, conversão, controle e aleatoriedade)
+#include <locale.h> // Permite usar acentuação e caracteres do idioma português
+#include <string.h> // Para usar strcmp (comparar strings)
+
+// Função que busca um aluno especifico pelo RA
+void buscarAlunoPorRA(char *arquivopython)
+{
+    FILE *arq = fopen(arquivopython, "r"); // Abre o arquivo no modo de leitura ("r")
+    if (arq == NULL) // Se nao conseguir abrir o arquivo
+    {
+        printf("Cadastro de notas nao encontrada! '%s'.\n", arquivopython);
+        return;
+    }
+
+    char RA_procurado[20];
+    printf("Digite o RA do aluno que deseja buscar: ");
+    scanf("%19s", RA_procurado);
+    
+    // Limpa o buffer do teclado para nao atrapalhar proximas leituras
+    while (getchar() != '\n');
+
+    // Variaveis para guardar as informaçoes de cada aluno
+    char linha[300];
+    char nome[100];
+    char RA[20];
+    char turma[30]; 
+    float n1, n2, n3, n4;
+    int encontrou = 0; // Variavel para verificar se achou o aluno
+
+    printf("\n--- Buscando aluno com RA: %s ---\n\n", RA_procurado);
+
+    // Essa parte lê o arquivo linha por linha procurando pelo RA
+    while (fgets(linha, sizeof(linha), arq))
+    {
+        int leu = sscanf(linha, "Aluno: %99[^;]; RA: %19[^;]; Turma: %29[^;]; Bimestre 1: %f; Bimestre 2: %f; Bimestre 3: %f; Bimestre 4: %f",
+                           nome, RA, turma, &n1, &n2, &n3, &n4);
+                           
+        if (leu == 7) //  Se ler todos os 7 campos entra aqui
+        {
+            // Compara o RA lido com o RA que estamos procurando
+            if (strcmp(RA, RA_procurado) == 0)
+            {
+                // Mostra os dados formatados na tela
+                printf("ALUNO ENCONTRADO!\n");
+                printf("Aluno: %s\n", nome);
+                printf("RA: %s\n", RA);
+                printf("Turma: %s\n", turma);
+                printf("Notas: %.1f, %.1f, %.1f, %.1f\n", n1, n2, n3, n4);
+                
+                // Calcula a media do aluno
+                float media = (n1 + n2 + n3 + n4) / 4;
+                printf("Média: %.2f - ", media);
+                if (media >= 5.0)
+				{
+                    printf("APROVADO\n");
+                } 
+				else
+				{
+                    printf("REPROVADO\n");
+                }
+                encontrou = 1; // Marca que encontrou o aluno
+                break; // Para de procurar pois ja achou o aluno
+            }
+        }
+    }
+
+    // Se nao encontrou nenhum aluno com esse RA
+    if (!encontrou)
+    {
+        printf("Nenhum aluno encontrado com RA: %s\n", RA_procurado);
+    }
+
+    fclose(arq); // Fecha o arquivo apos a leitura
+}
+
+// Função que abre o arquivo e exibe o relatorio de alunos
+void mostrarRelatorio(char *arquivopython)
+{
+    FILE *arq = fopen(arquivopython, "r"); // Abre o arquivo no modo de leitura ("r")
+    if (arq == NULL) // Se nao conseguir abrir o arquivo
+    {
+        printf("Cadastro de notas nao encontrada! '%s'.\n", arquivopython);
+        return;
+    }
+
+    // Variaveis para guardar as informaçoes de cada aluno
+    char linha[300];
+    char nome[100];
+    char RA[20];
+    char turma[30];
+    float n1, n2, n3, n4;
+
+    printf("\n--- Relatorio da Disciplina (%s) ---\n\n", arquivopython);
+
+    // Essa parte lê o arquivo linha por linha e usa o sscanf pra separar o nome, o RA, Turma e as notas.
+    while (fgets(linha, sizeof(linha), arq))
+    {
+        int leu = sscanf(linha, "Aluno: %99[^;]; RA: %19[^;]; Turma: %29[^;]; Bimestre 1: %f; Bimestre 2: %f; Bimestre 3: %f; Bimestre 4: %f",
+                           nome, RA, turma, &n1, &n2, &n3, &n4);
+                           
+        if (leu == 7) // Se conseguiu ler todos os 7 campos
+        {
+        	float media = (n1 + n2 + n3 + n4) / 4;
+			
+			// Mostra os dados formatados na tela
+            printf("Aluno: %s | RA: %s | Turma: %s | Notas: %.1f, %.1f, %.1f, %.1f | Média: %.2f | ",
+                   nome, RA, turma, n1, n2, n3, n4, media);
+            
+            if (media >= 5.0) 
+			{
+    		    printf("APROVADO\n");
+			}
+			else
+			{
+    		    printf("REPROVADO\n");
+			}
+		}
+        else
+        {
+        // Mostra linhas que não foram lidas corretamente
+            printf("Linha não lida: %s", linha);
+        }
+    }
+    fclose(arq); // Fecha o arquivo apos a leitura
+}
+
+int main()
+{
+    // Ativa suporte a lingua Brasileira
+    setlocale(LC_ALL, "Portuguese"); 
+    
+    int opcao;
+    
+    do
+    {
+        // Menu principal com as materias
+        printf("\n(====== Sistema academico - Relatorios ======)\n");
+        printf("1 - Mostrar TODOS os alunos\n");
+        printf("2 - Buscar aluno por RA\n");
+        printf("0 - Sair\n");
+        printf("Escolha uma opção: ");
+        scanf("%d", &opcao);
+        
+        // Limpa o buffer do teclado para nao atrapalhar
+        while (getchar() != '\n');
+
+        switch (opcao)
+        {
+            case 1:
+                {
+                    // Submenu para escolher a disciplina
+                    int disciplina;
+                    printf("\nSelecione a disciplina:\n");
+                    printf("1 - Matematica\n");
+                    printf("2 - Historia\n");
+                    printf("3 - Portugues\n");
+                    printf("4 - Artes\n");
+                    printf("5 - Geografia\n");
+                    printf("6 - Fisica\n");
+                    printf("7 - Algoritimo\n");
+                    printf("Escolha: ");
+                    scanf("%d", &disciplina);
+                    while (getchar() != '\n'); // Limpa o buffer
+                    
+                    // Cada case dependendo da opçao que voce escolher acima sera executada.
+                    switch (disciplina)
+                    {
+                        case 1:
+                            mostrarRelatorio("Cadastro de Disciplinas/Matematica/notas.txt");
+                            break;
+                        case 2:
+                            mostrarRelatorio("Cadastro de Disciplinas/Historia/notas.txt");
+                            break;
+                        case 3:
+                            mostrarRelatorio("Cadastro de Disciplinas/Portugues/notas.txt");
+                            break;
+                        case 4:
+                            mostrarRelatorio("Cadastro de Disciplinas/Artes/notas.txt");
+                            break;
+                        case 5:
+                            mostrarRelatorio("Cadastro de Disciplinas/Geografia/notas.txt");
+                            break;
+                        case 6:
+                            mostrarRelatorio("Cadastro de Disciplinas/Fisica/notas.txt");
+                            break;
+                        case 7:
+                            mostrarRelatorio("Cadastro de Disciplinas/Algoritmo/notas.txt");
+                            break;
+                        default:
+                            printf("Disciplina invalida!\n");
+                    }
+                }
+                break;
+                
+            case 2:
+                {
+                    // Submenu para escolher a disciplina
+                    int disciplina;
+                    printf("\nSelecione a disciplina:\n");
+                    printf("1 - Matematica\n");
+                    printf("2 - Historia\n");
+                    printf("3 - Portugues\n");
+                    printf("4 - Artes\n");
+                    printf("5 - Geografia\n");
+                    printf("6 - Fisica\n");
+                    printf("7 - Algoritimo\n");
+                    printf("Escolha: ");
+                    scanf("%d", &disciplina);
+                    while (getchar() != '\n'); // Limpa o buffer
+                    
+                    // Cada case dependendo da opçao que voce escolher acima sera executada.
+                    switch (disciplina)
+                    {
+                        case 1:
+                            buscarAlunoPorRA("Cadastro de Disciplinas/Matematica/notas.txt");
+                            break;
+                        case 2:
+                            buscarAlunoPorRA("Cadastro de Disciplinas/Historia/notas.txt");
+                            break;
+                        case 3:
+                            buscarAlunoPorRA("Cadastro de Disciplinas/Portugues/notas.txt");
+                            break;
+                        case 4:
+                            buscarAlunoPorRA("Cadastro de Disciplinas/Artes/notas.txt");
+                            break;
+                        case 5:
+                            buscarAlunoPorRA("Cadastro de Disciplinas/Geografia/notas.txt");
+                            break;
+                        case 6:
+                            buscarAlunoPorRA("Cadastro de Disciplinas/Fisica/notas.txt");
+                            break;
+                        case 7:
+                            buscarAlunoPorRA("Cadastro de Disciplinas/Algoritmo/notas.txt");
+                            break;
+                        default:
+                            printf("Disciplina invalida!\n");
+                    }
+                }
+                break;
+                
+            case 0:
+                printf("Saindo do sistema... ate a proxima\n");
+                break;
+            default:
+                printf("Opção invalida! Tente novamente.\n");
+        }
+    }
+    while (opcao != 0); // O progama roda ate o usuario escolher 0 que é sair.
+    
+    return 0;
+}
