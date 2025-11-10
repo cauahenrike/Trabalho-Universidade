@@ -1,0 +1,1019 @@
+import os
+import re
+import shutil
+import stat
+import tempfile
+import sys
+import time
+import unicodedata
+from typing import List, Tuple, Optional
+
+# =========================
+# Constantes e catálogos
+# =========================
+PASTA_ALUNOS = "Cadastro de Alunos"
+ARQ_CADASTRO = os.path.join(PASTA_ALUNOS, "cadastro.txt")
+
+PASTA_DISCIPLINAS = "Cadastro de Disciplinas"
+DISCIPLINAS = [
+    ("🎓 Matemática", "Matematica"),
+    ("📜 História", "Historia"),
+    ("📚 Português", "Portugues"),
+    ("🎨 Artes", "Artes"),
+    ("🌍 Geografia", "Geografia"),
+    ("⚛️ Física", "Fisica"),
+    ("💻 Algoritmo", "Algoritmo"),
+]
+
+# Mapa de palavras-chave -> emoji (chaves sem acento/caixa)
+EMOJI_POR_PALAVRA = {
+    "matematica": "🎓", "algebra": "🎓", "geometria": "🎓", "calculo": "🎓",
+    "historia": "📜",
+    "portugues": "📚", "lingua": "📚", "gramatica": "📚", "redacao": "📚",
+    "artes": "🎨", "desenho": "🎨", "pintura": "🎨", "musica": "🎨",
+    "geografia": "🌍", "mapas": "🌍", "geologia": "🌍",
+    "fisica": "⚛️", "quimica": "⚛️", "astronomia": "⚛️",
+    "algoritmo": "💻", "programacao": "💻", "computacao": "💻", "ti": "💻", "informatica": "💻",
+}
+EMOJI_PADRAO = "📘"
+
+CARACTERES_PROIBIDOS = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+
+# Tentativas e bloqueio para nome
+MAX_TENTATIVAS_NOME = 5
+BLOQUEIO_SEGUNDOS = 180  # 3 minutos
+
+# =========================
+# Configuração de PIN do Professor
+# =========================
+def fmt_br1(n: float) -> str:
+    """Formata número com 1 casa decimal e vírgula."""
+    try:
+        return f"{float(n):.1f}".replace(".", ",")
+    except Exception:
+        # fallback se vier algo não numérico
+        return str(n).replace(".", ",")
+
+def to_float_from_str_br(s: str) -> float:
+    """Converte string com ',' ou '.' para float."""
+    return float(s.replace(",", "."))
+
+# Função para cadastrar ou alterar o PIN
+def cadastrar_pin():
+    """Função para cadastrar ou alterar o PIN do professor"""
+    print("Por favor, defina um PIN para o sistema (4 dígitos): ")
+    while True:
+        pin = input("Digite um PIN de 4 dígitos: ").strip()
+        if len(pin) == 4 and pin.isdigit():
+            break
+        print("❌ O PIN deve ter exatamente 4 dígitos numéricos.")
+    
+    # Salva o PIN em um arquivo para uso posterior
+    with open("pin.txt", "w") as f:
+        f.write(pin)
+    print("✅ PIN configurado com sucesso!")
+
+def ler_pin():
+    """Função para ler o PIN salvo do arquivo"""
+    try:
+        with open("pin.txt", "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return None
+
+# =========================
+# Autenticação do Professor
+# =========================
+
+PROFESSOR_PIN = os.environ.get("PROFESSOR_PIN", "1234")  # PIN padrão
+
+def autenticar_professor() -> bool:
+    print("\n===== LOGIN DO PROFESSOR =====")
+    
+    pin_salvo = ler_pin()  # Tenta ler o PIN salvo
+    
+    # Se o PIN não estiver salvo, pede para o professor cadastrar
+    if pin_salvo is None:
+        print("Nenhum PIN configurado ainda.")
+        cadastrar_pin()  # Pede para cadastrar o PIN
+        pin_salvo = ler_pin()  # Lê o PIN após cadastro
+
+    # Usa o PIN configurado no arquivo ou o PIN padrão
+    pin_final = pin_salvo if pin_salvo else PROFESSOR_PIN
+
+    for _ in range(3):
+        pin = input("PIN do professor: ").strip()
+        if pin == pin_final:
+            print("✅ Acesso concedido.")
+            return True
+        print("❌ PIN inválido.")
+    
+    print("🚫 Acesso bloqueado.")
+    return False
+
+# =========================
+# Utilidades gerais
+# =========================
+def garantir_pasta(caminho: str):
+    try:
+        os.makedirs(caminho, exist_ok=True)
+    except OSError as e:
+        print(f"❌ Erro ao criar pasta '{caminho}': {e}")
+        sys.exit(1)
+
+def normalizar_nome(nome: str) -> str:
+    return "_".join(nome.strip().split())
+
+def tirar_acentos(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+
+def _tokens_nome_validos(nome: str) -> List[str]:
+    # Divide por espaços e remove vazios
+    return [t for t in re.split(r"\s+", nome.strip()) if t]
+
+def _nome_completo_e_valido(nome: str) -> bool:
+    """
+    Regras (sem revelar ao usuário):
+      - Pelo menos 2 palavras (nome e sobrenome)
+      - Cada uma com >= 3 letras e somente letras (suporta acentos)
+      - Sem caracteres proibidos
+    """
+    if not nome or not nome.strip():
+        return False
+    if any(ch in nome for ch in CARACTERES_PROIBIDOS):
+        return False
+    partes = _tokens_nome_validos(nome)
+    if len(partes) < 2:
+        return False
+    for p in partes[:2]:
+        if not (p.isalpha() and len(p) >= 3):
+            return False
+    return True
+
+def solicitar_nome_completo(prompt: str) -> str:
+    """
+    Pede o nome com até MAX_TENTATIVAS_NOME tentativas.
+    Em cada falha: mostra "❌ Nome incompleto." e pede novamente.
+    Após 5 falhas: bloqueia por 3 minutos (contagem) e recomeça.
+    Retorna o nome válido.
+    """
+    tentativas = 0
+    while True:
+        nome = input(prompt).strip()
+        if _nome_completo_e_valido(nome):
+            return nome
+
+        tentativas += 1
+        print("❌ Nome incompleto.")
+        if tentativas >= MAX_TENTATIVAS_NOME:
+            print(f"⏳ Muitos erros. Bloqueado por 3 minutos...")
+            for restante in range(BLOQUEIO_SEGUNDOS, 0, -1):
+                if restante % 10 == 0 or restante <= 10:
+                    print(f"   Aguarde {restante}s...", end="\r")
+                time.sleep(1)
+            print("\n🔓 Liberado novamente.")
+            tentativas = 0  # libera novas tentativas
+
+# >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+# Normalização de RA para comparação case-insensitive
+def normalizar_ra(ra: str) -> str:
+    return tirar_acentos(ra).strip().casefold()
+
+# RA alfanumérico com letras, números, ponto, underline e hífen
+def validar_ra(ra: str) -> bool:
+    ra = ra.strip()
+    if not ra:
+        print("❌ RA não pode ser vazio.")
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9._-]{3,}", ra):
+        print("❌ RA inválido...")
+        return False
+    return True
+
+def safe_path_component(s: str) -> str:
+    # Mantém apenas letras, números, ponto, underline e hífen; demais viram "_"
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", s.strip())
+
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+def ler_float(msg: str) -> float:
+    while True:
+        v = input(msg).strip().replace(",", ".")
+        try:
+            return float(v)
+        except ValueError:
+            print("⚠️ Valor inválido. Digite um número (ex.: 7.5).")
+
+def ler_float_vazio_para_manter(msg: str, atual: float) -> float:
+    while True:
+        v = input(msg).strip().replace(",", ".")
+        if v == "":
+            return atual
+        try:
+            n = float(v)
+            if validar_nota(n):
+                return n
+        except ValueError:
+            pass
+        print("⚠️ Valor inválido. Digite um número (0..10).")
+
+def validar_nota(n: float) -> bool:
+    if 0.0 <= n <= 10.0:
+        return True
+    print("❌ Nota fora do intervalo permitido (0 a 10).")
+    return False
+
+def escolher_emoji(nome_disciplina: str) -> str:
+    base = tirar_acentos(nome_disciplina).lower()
+    for palavra, emoji in EMOJI_POR_PALAVRA.items():
+        if palavra in base:
+            return emoji
+    return EMOJI_PADRAO
+
+# =========================
+# I/O do cadastro de alunos
+# =========================
+def ler_linhas_cadastro() -> List[str]:
+    if not os.path.exists(ARQ_CADASTRO):
+        return []
+    try:
+        with open(ARQ_CADASTRO, "r", encoding="utf-8") as f:
+            return f.readlines()
+    except OSError as e:
+        print(f"❌ Erro ao ler '{ARQ_CADASTRO}': {e}")
+        return []
+
+def escrever_cadastro_atomico(linhas: List[str]) -> bool:
+    garantir_pasta(PASTA_ALUNOS)
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", delete=False, dir=PASTA_ALUNOS) as tmp:
+            tmp.writelines(linhas)
+            temp_name = tmp.name
+        os.replace(temp_name, ARQ_CADASTRO)
+        return True
+    except OSError as e:
+        print(f"❌ Erro ao escrever '{ARQ_CADASTRO}': {e}")
+        return False
+
+def parse_linha(linha: str) -> Optional[Tuple[str, str, str]]:
+    # Formato esperado: Nome: <nome>, RA: <ra>, Turma: <turma>
+    try:
+        partes = [p.strip() for p in linha.strip().split(",")]
+        dados = {}
+        for p in partes:
+            if ": " in p:
+                k, v = p.split(": ", 1)
+                dados[k.lower()] = v
+        nome = dados.get("nome")
+        ra = dados.get("ra")
+        turma = dados.get("turma")
+        if nome and ra and turma:
+            return (nome, ra, turma)
+    except Exception:
+        pass
+    return None
+
+def procurar_por_ra(ra: str) -> Optional[Tuple[int, Tuple[str, str, str]]]:
+    """Procura no cadastro por RA ignorando maiúsculas/minúsculas."""
+    alvo = normalizar_ra(ra)
+    linhas = ler_linhas_cadastro()
+    for idx, linha in enumerate(linhas):
+        info = parse_linha(linha)
+        if info and normalizar_ra(info[1]) == alvo:
+            return idx, info
+    return None
+
+def pasta_do_aluno(nome: str, ra: str) -> str:
+    # usa RA seguro no sistema de arquivos + nome normalizado
+    ra_safe = safe_path_component(ra)
+    return os.path.join(PASTA_ALUNOS, f"{ra_safe}_{normalizar_nome(nome)}")
+
+def salvar_informacoes_pasta(nome: str, ra: str, turma: str):
+    caminho = pasta_do_aluno(nome, ra)
+    garantir_pasta(caminho)
+    try:
+        with open(os.path.join(caminho, "informacoes.txt"), "w", encoding="utf-8", newline="\n") as f:
+            f.write(f"Nome: {nome}\nRA: {ra}\nTurma: {turma}\n")
+    except OSError as e:
+        print(f"❌ Erro ao salvar informações na pasta do aluno: {e}")
+
+def listar_pastas_alunos() -> List[str]:
+    if not os.path.exists(PASTA_ALUNOS):
+        return []
+    try:
+        return [f for f in os.listdir(PASTA_ALUNOS)
+                if os.path.isdir(os.path.join(PASTA_ALUNOS, f))]
+    except OSError as e:
+        print(f"❌ Erro ao listar alunos: {e}")
+        return []
+
+def ler_informacoes_txt(caminho_info: str) -> Optional[str]:
+    try:
+        with open(caminho_info, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+def excluir_pasta(caminho: str):
+    try:
+        for root, dirs, files in os.walk(caminho):
+            for d in dirs:
+                try:
+                    os.chmod(os.path.join(root, d), stat.S_IWRITE)
+                except Exception:
+                    pass
+            for f in files:
+                try:
+                    os.chmod(os.path.join(root, f), stat.S_IWRITE)
+                except Exception:
+                    pass
+        os.chmod(caminho, stat.S_IWRITE)
+        shutil.rmtree(caminho)
+        print(f"✅ Pasta '{caminho}' excluída com sucesso.")
+    except Exception as e:
+        print(f"❌ Erro ao excluir a pasta '{caminho}': {e}")
+
+# =========================
+# Disciplinas / Notas
+# =========================
+def criar_pastas_disciplinas():
+    garantir_pasta(PASTA_DISCIPLINAS)
+    for _icone, nome_disc in DISCIPLINAS:
+        caminho = os.path.join(PASTA_DISCIPLINAS, nome_disc)
+        garantir_pasta(caminho)
+
+def caminho_notas_disciplina(nome_disc: str) -> str:
+    return os.path.join(PASTA_DISCIPLINAS, nome_disc, "notas.txt")
+
+def ler_linhas_arquivo(caminho: str) -> List[str]:
+    if not os.path.exists(caminho):
+        return []
+    try:
+        with open(caminho, "r", encoding="utf-8") as f:
+            return f.readlines()
+    except OSError as e:
+        print(f"❌ Erro ao ler '{caminho}': {e}")
+        return []
+
+def escrever_linhas_arquivo_atomico(caminho: str, linhas: List[str]) -> bool:
+    pasta = os.path.dirname(caminho)
+    garantir_pasta(pasta)
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", delete=False, dir=pasta) as tmp:
+            tmp.writelines(linhas)
+            temp_name = tmp.name
+        os.replace(temp_name, caminho)
+        return True
+    except OSError as e:
+        print(f"❌ Erro ao escrever '{caminho}': {e}")
+        return False
+
+def registrar_notas_para_ra(nome_disc: str, nome_aluno: str, ra: str):
+    """Coleta 4 notas (1..4), obtém a turma e registra em uma única linha no arquivo de notas da disciplina."""
+    # Buscar turma pelo cadastro
+    achado = procurar_por_ra(ra)
+    if not achado:
+        print("❌ Aluno não encontrado no cadastro para obter a turma.")
+        return
+    _, (_, _, turma) = achado
+
+    arquivo = caminho_notas_disciplina(nome_disc)
+    linhas = ler_linhas_arquivo(arquivo)
+
+    # Impede duplicidade de RA na mesma disciplina
+    for ln in linhas:
+        ra_ln = _extrair_ra_de_linha_notas(ln)
+        if ra_ln and normalizar_ra(ra_ln) == normalizar_ra(ra):
+            print("\n⚠️ Este aluno já possui notas lançadas nesta disciplina!")
+            print("Use a opção 'Editar Notas' no menu de gerenciamento.")
+            return
+
+    # Entrada das 4 notas
+    notas = []
+    for b in range(1, 5):
+        while True:
+            n = ler_float(f"Nota de {nome_aluno} (RA {ra}) no {b}º bimestre (0..10): ")
+            if validar_nota(n):
+                notas.append(n)
+                break
+
+    linha = (
+        f"Aluno: {nome_aluno}; RA: {ra}; Turma: {turma}; "
+        f"Bimestre 1: {fmt_br1(notas[0])}; "
+        f"Bimestre 2: {fmt_br1(notas[1])}; "
+        f"Bimestre 3: {fmt_br1(notas[2])}; "
+        f"Bimestre 4: {fmt_br1(notas[3])}\n"
+    )
+
+    linhas.append(linha)
+    if escrever_linhas_arquivo_atomico(arquivo, linhas):
+        print("✅ Notas registradas com sucesso!")
+
+
+def _extrair_ra_de_linha_notas(ln: str) -> Optional[str]:
+    """
+    Tenta extrair o RA de uma linha do arquivo de notas no formato "..., RA: <ra>, ..."
+    """
+    m = re.search(r"\bRA:\s*([A-Za-z0-9._-]+)", ln)
+    if m:
+        return m.group(1)
+    return None
+
+def atualizar_nome_em_notas(ra: str, nome_novo: str):
+    """Percorre todas as disciplinas e, em cada notas.txt, troca o nome antigo pelo novo nas linhas do RA (case-insensitive)."""
+    alvo = normalizar_ra(ra)
+    for _icone, nome_disc in DISCIPLINAS:
+        caminho = caminho_notas_disciplina(nome_disc)
+        if not os.path.exists(caminho):
+            continue
+        linhas = ler_linhas_arquivo(caminho)
+        alteradas = []
+        mudou = False
+        for ln in linhas:
+            ra_ln = _extrair_ra_de_linha_notas(ln)
+            if ra_ln and normalizar_ra(ra_ln) == alvo:
+                # Mantém o RA exatamente como está na linha; só atualiza o nome.
+                partes = ln.split("RA:")
+                if len(partes) >= 2:
+                    depois_ra = "RA:" + "RA:".join(partes[1:])
+                    ln = f"Aluno: {nome_novo}, {depois_ra}"
+                    mudou = True
+            alteradas.append(ln)
+        if mudou:
+            escrever_linhas_arquivo_atomico(caminho, alteradas)
+
+def _parse_linha_nota(ln: str) -> Optional[dict]:
+    """
+    Converte uma linha do notas.txt em dict:
+    {"nome": str, "ra": str, "turma": str, "b1": float, "b2": float, "b3": float, "b4": float}
+    Aceita vírgula ou ponto nos números.
+    """
+    try:
+        m_nome  = re.search(r"Aluno:\s*(.*?);", ln)
+        m_ra    = re.search(r"\bRA:\s*([A-Za-z0-9._-]+);", ln)
+        m_turma = re.search(r"\bTurma:\s*([^;]+);", ln)
+        m_b1 = re.search(r"Bimestre\s*1:\s*([0-9]+(?:[.,][0-9]+)?)", ln)
+        m_b2 = re.search(r"Bimestre\s*2:\s*([0-9]+(?:[.,][0-9]+)?)", ln)
+        m_b3 = re.search(r"Bimestre\s*3:\s*([0-9]+(?:[.,][0-9]+)?)", ln)
+        m_b4 = re.search(r"Bimestre\s*4:\s*([0-9]+(?:[.,][0-9]+)?)", ln)
+        if not (m_nome and m_ra and m_turma and m_b1 and m_b2 and m_b3 and m_b4):
+            return None
+
+        return {
+            "nome":  m_nome.group(1).strip(),
+            "ra":    m_ra.group(1).strip(),
+            "turma": m_turma.group(1).strip(),
+            "b1":    to_float_from_str_br(m_b1.group(1)),
+            "b2":    to_float_from_str_br(m_b2.group(1)),
+            "b3":    to_float_from_str_br(m_b3.group(1)),
+            "b4":    to_float_from_str_br(m_b4.group(1)),
+        }
+    except Exception:
+        return None
+
+def _format_linha_nota(reg: dict) -> str:
+    return (
+        f"Aluno: {reg['nome']}; RA: {reg['ra']}; Turma: {reg.get('turma','')}; "
+        f"Bimestre 1: {fmt_br1(reg['b1'])}; "
+        f"Bimestre 2: {fmt_br1(reg['b2'])}; "
+        f"Bimestre 3: {fmt_br1(reg['b3'])}; "
+        f"Bimestre 4: {fmt_br1(reg['b4'])}\n"
+    )
+
+
+def _listar_notas(nome_disc: str):
+    arquivo = caminho_notas_disciplina(nome_disc)
+    linhas = ler_linhas_arquivo(arquivo)
+    if not linhas:
+        print("⚠️ Não há notas lançadas para esta disciplina.")
+        return
+
+    print("\n--- Lançamentos de Notas ---")
+    for i, ln in enumerate(linhas, 1):
+        reg = _parse_linha_nota(ln)
+        if reg:
+            media = (reg['b1'] + reg['b2'] + reg['b3'] + reg['b4']) / 4.0
+            print(
+                f"{i:>3}. {reg['nome']} (RA {reg['ra']}) (Turma {reg.get('turma','')})  "
+                f"[1º:{fmt_br1(reg['b1'])}  2º:{fmt_br1(reg['b2'])}  "
+                f"3º:{fmt_br1(reg['b3'])}  4º:{fmt_br1(reg['b4'])}  | Média:{fmt_br1(media)}]"
+            )
+        else:
+            print(f"{i:>3}. {ln.strip()}")
+
+
+def _buscar_indices_por_ra(linhas: List[str], ra: str) -> List[int]:
+    alvo = normalizar_ra(ra)
+    indices = []
+    for i, ln in enumerate(linhas):
+        ra_ln = _extrair_ra_de_linha_notas(ln)
+        if ra_ln and normalizar_ra(ra_ln) == alvo:
+            indices.append(i)
+    return indices
+
+def _editar_lancamento(nome_disc: str):
+    arquivo = caminho_notas_disciplina(nome_disc)
+    linhas = ler_linhas_arquivo(arquivo)
+    if not linhas:
+        print("⚠️ Não há notas lançadas para esta disciplina.")
+        return
+
+    ra = input("Digite o RA para editar (case-insensitive): ").strip()
+    if not validar_ra(ra):
+        return
+
+    indices = _buscar_indices_por_ra(linhas, ra)
+    if not indices:
+        print("❌ Nenhum lançamento encontrado para este RA.")
+        return
+
+    if len(indices) > 1:
+        print("\nForam encontrados vários lançamentos para esse RA:")
+        for j, idx in enumerate(indices, 1):
+            reg = _parse_linha_nota(linhas[idx]) or {}
+            nome = reg.get("nome", "?")
+            b1 = fmt_br1(reg.get("b1","?")); b2 = fmt_br1(reg.get("b2","?"))
+            b3 = fmt_br1(reg.get("b3","?")); b4 = fmt_br1(reg.get("b4","?"))
+            print(f"{j}. {nome} (linha {idx+1})  1º:{b1} 2º:{b2} 3º:{b3} 4º:{b4}")
+        try:
+            es = int(input("Escolha qual registro deseja editar: "))
+            if not (1 <= es <= len(indices)):
+                print("❌ Opção inválida.")
+                return
+            alvo_idx = indices[es - 1]
+        except ValueError:
+            print("❌ Opção inválida.")
+            return
+    else:
+        alvo_idx = indices[0]
+
+    reg = _parse_linha_nota(linhas[alvo_idx])
+    if not reg:
+        print("❌ Formato da linha não reconhecido; edição cancelada.")
+        return
+
+    print(f"\nEditando {reg['nome']} (RA {reg['ra']}) (Turma {reg.get('turma','')}):")
+    b1 = ler_float_vazio_para_manter(f"1º Bimestre (atual {fmt_br1(reg['b1'])}): ", reg['b1'])
+    b2 = ler_float_vazio_para_manter(f"2º Bimestre (atual {fmt_br1(reg['b2'])}): ", reg['b2'])
+    b3 = ler_float_vazio_para_manter(f"3º Bimestre (atual {fmt_br1(reg['b3'])}): ", reg['b3'])
+    b4 = ler_float_vazio_para_manter(f"4º Bimestre (atual {fmt_br1(reg['b4'])}): ", reg['b4'])
+
+    reg['b1'], reg['b2'], reg['b3'], reg['b4'] = b1, b2, b3, b4
+    linhas[alvo_idx] = _format_linha_nota(reg)
+
+    if escrever_linhas_arquivo_atomico(arquivo, linhas):
+        print("✅ Lançamento atualizado com sucesso!")
+
+
+def _excluir_lancamento(nome_disc: str):
+    arquivo = caminho_notas_disciplina(nome_disc)
+    linhas = ler_linhas_arquivo(arquivo)
+    if not linhas:
+        print("⚠️ Não há notas lançadas para esta disciplina.")
+        return
+
+    ra = input("Digite o RA para excluir (case-insensitive): ").strip()
+    if not validar_ra(ra):
+        return
+
+    indices = _buscar_indices_por_ra(linhas, ra)
+    if not indices:
+        print("❌ Nenhum lançamento encontrado para este RA.")
+        return
+
+    if len(indices) > 1:
+        print("\nForam encontrados vários lançamentos para esse RA:")
+        for j, idx in enumerate(indices, 1):
+            reg = _parse_linha_nota(linhas[idx]) or {}
+            nome = reg.get("nome", "?")
+            b1 = reg.get("b1", "?"); b2 = reg.get("b2", "?"); b3 = reg.get("b3", "?"); b4 = reg.get("b4", "?")
+            print(f"{j}. {nome} (linha {idx+1})  1º:{b1} 2º:{b2} 3º:{b3} 4º:{b4}")
+        try:
+            es = int(input("Escolha qual registro deseja excluir: "))
+            if not (1 <= es <= len(indices)):
+                print("❌ Opção inválida.")
+                return
+            alvo_idx = indices[es - 1]
+        except ValueError:
+            print("❌ Opção inválida.")
+            return
+    else:
+        alvo_idx = indices[0]
+
+    reg = _parse_linha_nota(linhas[alvo_idx]) or {}
+    confirm = input(f"Confirma excluir o lançamento de {reg.get('nome','?')} (RA {reg.get('ra','?')})? (s/n): ").strip().lower()
+    if confirm != "s":
+        print("🔙 Exclusão cancelada.")
+        return
+
+    del linhas[alvo_idx]
+    if escrever_linhas_arquivo_atomico(arquivo, linhas):
+        print("✅ Lançamento excluído com sucesso!")
+
+def _visualizar_por_ra(nome_disc: str):
+    arquivo = caminho_notas_disciplina(nome_disc)
+    linhas = ler_linhas_arquivo(arquivo)
+    if not linhas:
+        print("⚠️ Não há notas lançadas para esta disciplina.")
+        return
+
+    ra = input("Digite o RA para visualizar (case-insensitive): ").strip()
+    if not validar_ra(ra):
+        return
+
+    indices = _buscar_indices_por_ra(linhas, ra)
+    if not indices:
+        print("❌ Nenhum lançamento encontrado para este RA.")
+        return
+
+    print("\n--- Lançamentos encontrados ---")
+    for idx in indices:
+        reg = _parse_linha_nota(linhas[idx])
+        if reg:
+            media = (reg['b1'] + reg['b2'] + reg['b3'] + reg['b4']) / 4.0
+            print(
+                f"- {reg['nome']} (RA {reg['ra']}) (Turma {reg.get('turma','')})  "
+                f"[1º:{fmt_br1(reg['b1'])}  2º:{fmt_br1(reg['b2'])}  "
+                f"3º:{fmt_br1(reg['b3'])}  4º:{fmt_br1(reg['b4'])}  | Média:{fmt_br1(media)}]"
+            )
+        else:
+            print(f"- {linhas[idx].strip()}")
+
+
+# ======= menu de gerenciamento de notas =======
+def gerenciar_notas():
+    # Escolher disciplina
+    while True:
+        print("\n--- 📚 Gerenciar Notas por Disciplina ---\n")
+        for idx, (icone, _nome) in enumerate(DISCIPLINAS, 1):
+            print(f"{idx}. {icone}")
+        print("\n0. Voltar")
+
+        esc = input("\nEscolha uma disciplina: ").strip()
+        if not esc.isdigit():
+            print("⚠️ Digite um número válido.")
+            continue
+        esc = int(esc)
+        if esc == 0:
+            return
+        if 1 <= esc <= len(DISCIPLINAS):
+            nome_disc = DISCIPLINAS[esc - 1][1]
+            _submenu_gerenciar_notas(nome_disc)
+        else:
+            print("❌ Opção inválida!")
+
+def _submenu_gerenciar_notas(nome_disc: str):
+    while True:
+        print(f"\n=== Gerenciar Notas — {nome_disc} ===")
+        print("1. Listar todos os lançamentos")
+        print("2. Visualizar Notas")
+        print("3. Editar Notas")
+        print("4. Excluir Notas")
+        print("0. Voltar")
+
+        op = input("Escolha uma opção: ").strip()
+        if op == "1":
+            _listar_notas(nome_disc)
+        elif op == "2":
+            _visualizar_por_ra(nome_disc)
+        elif op == "3":
+            _editar_lancamento(nome_disc)
+        elif op == "4":
+            _excluir_lancamento(nome_disc)
+        elif op == "0":
+            return
+        else:
+            print("❌ Opção inválida!")
+
+# =========================
+# Fluxos: Alunos (apenas professor opera)
+# =========================
+def cadastrar_aluno() -> bool:
+    """
+    Cadastra um aluno e retorna True se o cadastro foi salvo com sucesso.
+    """
+    nome = solicitar_nome_completo("Digite o nome do aluno: ")
+    ra = input("Digite o RA do aluno: ").strip()
+    if not validar_ra(ra):
+        return False
+
+    if procurar_por_ra(ra):
+        print(f"❌ Aluno com RA {ra} já cadastrado.\n")
+        return False
+
+    turma = input("Digite a turma do aluno: ").strip()
+    if not turma:
+        print("❌ Turma não pode ser vazia.")
+        return False
+
+    linha = f"Nome: {nome}, RA: {ra}, Turma: {turma}\n"
+    linhas = ler_linhas_cadastro()
+    linhas.append(linha)
+    if escrever_cadastro_atomico(linhas):
+        salvar_informacoes_pasta(nome, ra, turma)
+        print(f"✅ Aluno {nome} cadastrado com sucesso.\n")
+        return True
+    return False
+
+def gerenciar_alunos():
+    pastas = listar_pastas_alunos()
+    pastas = [p for p in pastas if not p.endswith(".txt") and p != "__pycache__"]
+    if pastas:
+        print("\nAlunos Cadastrados:")
+        for idx, pasta in enumerate(pastas, 1):
+            print(f"📁 {idx}. {pasta}")
+        print("\n↩️ 0. Voltar ao Menu Principal")
+        try:
+            escolha = int(input("Escolha uma pasta para visualizar: "))
+            if escolha == 0:
+                return
+            if 1 <= escolha <= len(pastas):
+                pasta_aluno = os.path.join(PASTA_ALUNOS, pastas[escolha - 1])
+                info_path = os.path.join(pasta_aluno, "informacoes.txt")
+                conteudo = ler_informacoes_txt(info_path)
+                if conteudo:
+                    print("\n" + conteudo)
+                else:
+                    print("❌ Não foi possível encontrar as informações do aluno.")
+                input("Pressione Enter para voltar…")
+            else:
+                print("❌ Opção inválida!")
+        except ValueError:
+            print("⚠️ Por favor, digite um número válido.")
+    else:
+        print("⚠️ Nenhum aluno cadastrado ainda.\n")
+        input("Pressione Enter para continuar...")
+
+def editar_informacoes_aluno():
+    ra_digitado = input("Digite o RA do aluno que deseja editar: ").strip()
+    if not validar_ra(ra_digitado):
+        return
+
+    achado = procurar_por_ra(ra_digitado)
+    if not achado:
+        print(f"❌ Aluno com RA {ra_digitado} não encontrado.\n")
+        return
+
+    idx_linha, (nome_antigo, ra_cadastrado, turma_antiga) = achado
+    print(f"Atual: Nome='{nome_antigo}', Turma='{turma_antiga}'")
+
+    entrada = input("Novo nome (enter para manter): ").strip()
+    if entrada:
+        nome_novo = solicitar_nome_completo("Confirme o novo nome (nome e sobrenome): ")
+    else:
+        nome_novo = nome_antigo
+
+    turma_nova = input("Nova turma (enter para manter): ").strip() or turma_antiga
+
+    linhas = ler_linhas_cadastro()
+    novas = []
+    alvo = normalizar_ra(ra_cadastrado)
+    for ln in linhas:
+        info = parse_linha(ln)
+        if info and normalizar_ra(info[1]) == alvo:
+            novas.append(f"Nome: {nome_novo}, RA: {ra_cadastrado}, Turma: {turma_nova}\n")
+        else:
+            novas.append(ln)
+    if not escrever_cadastro_atomico(novas):
+        return
+
+    pasta_antiga = pasta_do_aluno(nome_antigo, ra_cadastrado)
+    pasta_nova = pasta_do_aluno(nome_novo, ra_cadastrado)
+    try:
+        if os.path.exists(pasta_antiga) and pasta_antiga != pasta_nova:
+            garantir_pasta(os.path.dirname(pasta_nova))
+            os.replace(pasta_antiga, pasta_nova)
+        garantir_pasta(pasta_nova)
+        salvar_informacoes_pasta(nome_novo, ra_cadastrado, turma_nova)
+    except OSError as e:
+        print(f"❌ Erro ao atualizar pasta do aluno: {e}")
+
+    atualizar_nome_em_notas(ra_cadastrado, nome_novo)
+
+    print("✅ Informações atualizadas com sucesso.\n")
+
+def excluir_aluno():
+    ra_digitado = input("Digite o RA do aluno que deseja excluir: ").strip()
+    if not validar_ra(ra_digitado):
+        return
+
+    achado = procurar_por_ra(ra_digitado)
+    if not achado:
+        print(f"❌ Aluno com RA {ra_digitado} não encontrado.\n")
+        return
+
+    _, (nome, ra_cadastrado, _turma) = achado
+
+    linhas = ler_linhas_cadastro()
+    novas = []
+    alvo = normalizar_ra(ra_cadastrado)
+    for ln in linhas:
+        info = parse_linha(ln)
+        if not (info and normalizar_ra(info[1]) == alvo):
+            novas.append(ln)
+    if not escrever_cadastro_atomico(novas):
+        return
+
+    pasta = pasta_do_aluno(nome, ra_cadastrado)
+    if os.path.exists(pasta):
+        print(f"⚠️ Excluindo dados do aluno '{nome}' (RA {ra_cadastrado})...")
+        excluir_pasta(pasta)
+
+    print(f"✅ Aluno RA {ra_cadastrado} excluído com sucesso.\n")
+
+# =========================
+# Fluxos: Disciplinas/Notas
+# =========================
+def adicionar_disciplina():
+    print("\n--- ➕ Adicionar nova disciplina ---\n")
+    nome_digitado = input("Nome da disciplina: ").strip()
+    if not nome_digitado:
+        print("❌ Nome não pode ser vazio.")
+        return
+
+    emoji = escolher_emoji(nome_digitado)
+
+    nome_folder_base = tirar_acentos(nome_digitado).strip()
+    nome_folder_base = re.sub(r"\s+", " ", nome_folder_base)
+    nome_folder = safe_path_component(nome_folder_base.replace(" ", "")) or "Disciplina"
+
+    normalizados_existentes = {tirar_acentos(n).lower() for (_ico, n) in DISCIPLINAS}
+    nome_norm_menu = tirar_acentos(nome_digitado).lower()
+    nome_norm_folder = tirar_acentos(nome_folder).lower()
+    if nome_norm_menu in normalizados_existentes or nome_norm_folder in normalizados_existentes:
+        print("⚠️ Essa disciplina já existe no catálogo.")
+        return
+
+    DISCIPLINAS.append((f"{emoji} {nome_digitado.strip()}", nome_folder))
+
+    caminho = os.path.join(PASTA_DISCIPLINAS, nome_folder)
+    garantir_pasta(caminho)
+
+    print(f"✅ Disciplina adicionada: {emoji} {nome_digitado} → pasta: {caminho}")
+
+def menu_notas():
+    while True:
+        print("\n--- Disciplinas ---\n")
+        for idx, (icone, _nome) in enumerate(DISCIPLINAS, 1):
+            print(f"{idx}. {icone}")
+        print("\n0. Voltar")
+
+        esc = input("\nEscolha uma disciplina: ").strip()
+        if not esc.isdigit():
+            print("⚠️ Digite um número válido.")
+            continue
+        esc = int(esc)
+        if esc == 0:
+            return
+        if 1 <= esc <= len(DISCIPLINAS):
+            nome_disc = DISCIPLINAS[esc - 1][1]
+            fluxo_inserir_notas(nome_disc)
+            return
+        print("❌ Opção inválida!")
+
+def fluxo_inserir_notas(nome_disc: str):
+    print(f"\n--- Inserir Notas para {nome_disc} ---\n")
+    ra = input("Digite o RA do aluno (ou 'sair' para voltar): ").strip()
+    if ra.lower() == "sair":
+        return
+    if not validar_ra(ra):
+        return
+    achado = procurar_por_ra(ra)
+    if not achado:
+        print("❌ RA não encontrado no cadastro de alunos.")
+        criar = input("Deseja cadastrar agora? (s/n): ").strip().lower()
+        if criar == "s":
+            cadastrar_aluno()
+        return
+
+    _, (nome, ra_cadastrado, _turma) = achado
+    print(f"Aluno encontrado: {nome} (RA {ra_cadastrado})")
+    registrar_notas_para_ra(nome_disc, nome, ra_cadastrado)
+
+# =========================
+# Higienização do cadastro (remove linhas incompletas)
+# =========================
+def higienizar_cadastro():
+    linhas = ler_linhas_cadastro()
+    if not linhas:
+        return
+    novas = []
+    alterou = False
+    for ln in linhas:
+        info = parse_linha(ln)
+        if info:
+            novas.append(f"Nome: {info[0]}, RA: {info[1]}, Turma: {info[2]}\n")
+        else:
+            # linha inválida (ex.: "RA: X" isolado) é descartada
+            alterou = True
+    if alterou:
+        escrever_cadastro_atomico(novas)
+# =========================
+# Gerenciar Disciplinas (editar/excluir)
+# =========================
+def gerenciar_disciplinas():
+    """Permite editar ou excluir disciplinas existentes."""
+    while True:
+        print("\n--- ✏️ Gerenciar Disciplinas ---")
+        for idx, (icone, nome) in enumerate(DISCIPLINAS, 1):
+            print(f"{idx}. {icone} ({nome})")
+        print("\n0. Voltar")
+
+        try:
+            escolha = int(input("\nEscolha uma disciplina para editar/excluir: "))
+        except ValueError:
+            print("⚠️ Por favor, digite um número válido.")
+            continue
+
+        if escolha == 0:
+            return
+        if 1 <= escolha <= len(DISCIPLINAS):
+            editar_ou_excluir_disciplina(escolha - 1)
+        else:
+            print("❌ Opção inválida!")
+
+
+def editar_ou_excluir_disciplina(idx: int):
+    icone_atual, nome_atual = DISCIPLINAS[idx]
+    print(f"\nDisciplina selecionada: {icone_atual} ({nome_atual})")
+    print("1. Editar nome/ícone")
+    print("2. Excluir disciplina (irá remover os arquivos ligados a ela!)")
+    print("0. Voltar")
+
+    opc = input("\nEscolha uma opção: ").strip()
+    if opc == '1':
+        novo_icone = input("Novo ícone (ou enter para manter): ").strip() or icone_atual
+        novo_nome = input("Novo nome (ou enter para manter): ").strip() or nome_atual
+
+        # Atualiza tabela de disciplinas
+        DISCIPLINAS[idx] = (f"{novo_icone} {novo_nome.strip()}", safe_path_component(novo_nome))
+        print(f"✅ Disciplina atualizada para: {novo_icone} {novo_nome}")
+
+    elif opc == '2':
+        confirm = input(f"⚠️ Tem certeza que deseja excluir '{nome_atual}'? (s/n): ").strip().lower()
+        if confirm == 's':
+            pasta = os.path.join(PASTA_DISCIPLINAS, nome_atual)
+            if os.path.exists(pasta):
+                excluir_pasta(pasta)
+            DISCIPLINAS.pop(idx)
+            print(f"✅ Disciplina '{nome_atual}' excluída com sucesso.")
+    else:
+        print("🔙 Voltando...")
+
+# =========================
+# Menu principal (somente Professor)
+# =========================
+def exibir_menu_principal():
+    while True:
+        print("\n===== MENU DO PROFESSOR =====")
+        print("🆕 1. Cadastrar Aluno")
+        print("📂 2. Gerenciar Alunos")  # listar/abrir pastas
+        print("✏️ 3. Editar Informações do Aluno")
+        print("🗑️ 4. Excluir Aluno")
+        print("➕ 5. Adicionar Disciplina")
+        print("🧮 6. Lançar Notas por Disciplina")
+        print("🗂️ 7. Gerenciar Notas (listar/visualizar/editar/excluir)")
+        print("📝 8. Gerenciar Disciplinas (editar/excluir)")
+        print("🚪 0. Sair")
+
+        try:
+            escolha = int(input("\nEscolha uma opção: "))
+        except ValueError:
+            print("⚠️ Por favor, digite um número válido.")
+            continue
+
+        if escolha == 1:
+            cadastrar_aluno()
+        elif escolha == 2:
+            gerenciar_alunos()
+        elif escolha == 3:
+            editar_informacoes_aluno()
+        elif escolha == 4:
+            excluir_aluno()
+        elif escolha == 5:
+            adicionar_disciplina()
+        elif escolha == 6:
+            menu_notas()
+        elif escolha == 7:
+            gerenciar_notas()
+        elif escolha == 8:
+            gerenciar_disciplinas()
+        elif escolha == 0:
+            print("👋 Saindo...")
+            break
+        else:
+            print("❌ Opção inválida!")
+
+# =========================
+# main
+# =========================
+def main():
+    if not autenticar_professor():
+        return
+    garantir_pasta(PASTA_ALUNOS)
+    criar_pastas_disciplinas()
+    higienizar_cadastro()
+    exibir_menu_principal()
+
+if __name__ == "__main__":
+    main()
