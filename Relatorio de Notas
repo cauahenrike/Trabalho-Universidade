@@ -159,7 +159,7 @@ int main()
                     printf("4 - Artes\n");
                     printf("5 - Geografia\n");
                     printf("6 - Fisica\n");
-                    printf("7 - Algoritimo\n");
+                    printf("7 - Algoritmo\n");
                     printf("Escolha: ");
                     scanf("%d", &disciplina);
                     while (getchar() != '\n'); // Limpa o buffer
@@ -205,7 +205,7 @@ int main()
                     printf("4 - Artes\n");
                     printf("5 - Geografia\n");
                     printf("6 - Fisica\n");
-                    printf("7 - Algoritimo\n");
+                    printf("7 - Algoritmo\n");
                     printf("Escolha: ");
                     scanf("%d", &disciplina);
                     while (getchar() != '\n'); // Limpa o buffer
