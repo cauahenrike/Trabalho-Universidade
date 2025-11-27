@@ -9,12 +9,25 @@ import unicodedata
 from typing import List, Tuple, Optional
 
 # =========================
-# Constantes e catálogos
+# Salvando na Área de Trabalho
 # =========================
-PASTA_ALUNOS = "Cadastro de Alunos"
+
+# Cria a pasta principal do sistema na Área de Trabalho
+BASE_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "Sistema_Escola")
+os.makedirs(BASE_DIR, exist_ok=True)  # garante que exista
+
+# Define a pasta onde ficam os alunos (fora do VSCode)
+PASTA_ALUNOS = os.path.join(BASE_DIR, "Cadastro de Alunos")
+
+# Define a pasta onde ficam as disciplinas (fora do VSCode)
+PASTA_DISCIPLINAS = os.path.join(BASE_DIR, "Cadastro de Disciplinas")
+
+# Arquivo de cadastro geral dos alunos
 ARQ_CADASTRO = os.path.join(PASTA_ALUNOS, "cadastro.txt")
 
-PASTA_DISCIPLINAS = "Cadastro de Disciplinas"
+# Arquivo onde o PIN do professor será salvo
+ARQ_PIN = os.path.join(BASE_DIR, "pin.txt")
+
 DISCIPLINAS = [
     ("🎓 Matemática", "Matematica"),
     ("📜 História", "Historia"),
@@ -58,25 +71,24 @@ def to_float_from_str_br(s: str) -> float:
     """Converte string com ',' ou '.' para float."""
     return float(s.replace(",", "."))
 
-# Função para cadastrar ou alterar o PIN
 def cadastrar_pin():
-    """Função para cadastrar ou alterar o PIN do professor"""
+    # Salva o PIN do professor no arquivo pin.txt na Área de Trabalho
     print("Por favor, defina um PIN para o sistema (4 dígitos): ")
     while True:
         pin = input("Digite um PIN de 4 dígitos: ").strip()
         if len(pin) == 4 and pin.isdigit():
             break
         print("❌ O PIN deve ter exatamente 4 dígitos numéricos.")
-    
-    # Salva o PIN em um arquivo para uso posterior
-    with open("pin.txt", "w") as f:
+
+    with open(ARQ_PIN, "w") as f:  # salva no diretório do sistema
         f.write(pin)
     print("✅ PIN configurado com sucesso!")
 
+
 def ler_pin():
-    """Função para ler o PIN salvo do arquivo"""
+    # Lê o PIN salvo na Área de Trabalho
     try:
-        with open("pin.txt", "r") as f:
+        with open(ARQ_PIN, "r") as f:
             return f.read().strip()
     except FileNotFoundError:
         return None
@@ -342,6 +354,13 @@ def criar_pastas_disciplinas():
         caminho = os.path.join(PASTA_DISCIPLINAS, nome_disc)
         garantir_pasta(caminho)
 
+        # 🔥 GARANTE QUE O notas.txt EXISTE (mesmo vazio)
+        notas = os.path.join(caminho, "notas.txt")
+        if not os.path.exists(notas):
+            with open(notas, "w", encoding="utf-8") as f:
+                f.write("")   # cria arquivo vazio
+
+
 def caminho_notas_disciplina(nome_disc: str) -> str:
     return os.path.join(PASTA_DISCIPLINAS, nome_disc, "notas.txt")
 
@@ -518,7 +537,7 @@ def _editar_lancamento(nome_disc: str):
         print("⚠️ Não há notas lançadas para esta disciplina.")
         return
 
-    ra = input("Digite o RA para editar (case-insensitive): ").strip()
+    ra = input("Digite o RA para editar: ").strip()
     if not validar_ra(ra):
         return
 
@@ -972,8 +991,8 @@ def exibir_menu_principal():
         print("🗑️ 4. Excluir Aluno")
         print("➕ 5. Adicionar Disciplina")
         print("🧮 6. Lançar Notas por Disciplina")
-        print("🗂️ 7. Gerenciar Notas (listar/visualizar/editar/excluir)")
-        print("📝 8. Gerenciar Disciplinas (editar/excluir)")
+        print("🗂️ 7. Gerenciar Notas ")
+        print("📝 8. Gerenciar Disciplinas ")
         print("🚪 0. Sair")
 
         try:
